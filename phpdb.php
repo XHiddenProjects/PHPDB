@@ -2345,27 +2345,120 @@ class PHPDBUtils{
         }
         return $indexes;
     }
+    
     /**
-     * Builds a SQL-like condition string from an associative array
-     * @param array $conditions Associative array of conditions (column => value). Example: ['id' => 1, 'name' => 'John', 'active' => true]
-     * @return string SQL-like condition string (Always joined with AND)
+     * Builds a SQL-like condition string from an associative array.
+     * - Keys are treated as column identifiers and quoted with backticks.
+     * - Values are mapped to SQL literals with reasonable formatting.
+     * - Arrays produce IN() or a combined (IS NULL OR IN (...)) when NULL is present.
+     *
+     * Examples:
+     *  ['id' => 1, 'name' => "O'Hara", 'active' => true]
+     *    => "`id`=1 AND `name`='O''Hara' AND `active` = TRUE"
+     *
+     *  ['id' => [1,2,3], 'status' => [null, 'active']]
+     *    => "`id` IN (1,2,3) AND (`status` IS NULL OR `status` IN ('active'))"
      */
     public static function conditionBuilder(array $conditions): string{
         $parts = [];
-        foreach($conditions as $k => $v){
-            if(\is_string($v)){
-                $safe = str_replace("'", "\\'", $v);
-                $parts[] = "$k='$safe'";
-            } elseif($v===null){
-                $parts[] = "$k IS NULL";
-            } elseif(\is_bool($v)){
-                $parts[] = $k . ' ' . ($v ? '= TRUE' : '= FALSE');
+
+        foreach ($conditions as $key => $value) {
+            // Quote the identifier with backticks; allow dotted names: table.column
+            $identifier = implode('.', array_map(
+                fn($p) => '`' . str_replace('`', '``', (string)$p) . '`',
+                explode('.', (string)$key)
+            ));
+
+            // Handle arrays => IN / IS NULL
+            if (\is_array($value)) {
+                // Normalize array values to literals
+                $literals = [];
+                $hasNull = false;
+
+                foreach ($value as $v) {
+                    if ($v === null) {
+                        $hasNull = true;
+                        continue;
+                    }
+                    $literals[] = self::toSqlLiteral($v);
+                }
+
+                if ($hasNull && \count($literals) > 0) {
+                    // (col IS NULL OR col IN (...))
+                    $parts[] = \sprintf(
+                        '( %s IS NULL OR %s IN (%s) )',
+                        $identifier,
+                        $identifier,
+                        implode(',', $literals)
+                    );
+                } elseif ($hasNull && \count($literals) === 0) {
+                    // Only NULLs in the array -> col IS NULL
+                    $parts[] = \sprintf('%s IS NULL', $identifier);
+                } elseif (!$hasNull && \count($literals) > 0) {
+                    // Regular IN list
+                    $parts[] = \sprintf('%s IN (%s)', $identifier, implode(',', $literals));
+                } else {
+                    // Empty array -> no possible match
+                    $parts[] = 'FALSE';
+                }
+
+                continue;
+            }
+
+            // Scalars and nulls
+            if ($value === null) {
+                $parts[] = \sprintf('%s IS NULL', $identifier);
+            } elseif (\is_bool($value)) {
+                $parts[] = $identifier . ' ' . ($value ? '= TRUE' : '= FALSE');
             } else {
-                $parts[] = "$k=$v";
+                $parts[] = \sprintf('%s=%s', $identifier, self::toSqlLiteral($value));
             }
         }
         return implode(' AND ', $parts);
     }
+
+    /**
+     * Convert a PHP value to a SQL literal string suitable for conditionBuilder.
+     * - Numbers: as-is
+     * - Strings: single quoted, with internal single quotes doubled
+     * - DateTimeInterface: 'Y-m-d H:i:s'
+     * - Objects with __toString(): stringified then quoted
+     */
+    private static function toSqlLiteral($v): string
+    {
+        if (is_int($v) || is_float($v)) {
+            return (string)$v;
+        }
+        if ($v instanceof \DateTimeInterface) {
+            return "'" . $v->format('Y-m-d H:i:s') . "'";
+        }
+        if (is_string($v)) {
+            // SQL-standard string escaping by doubling single quotes
+            $safe = str_replace("'", "''", $v);
+            return "'" . $safe . "'";
+        }
+        if (is_bool($v)) {
+            return $v ? 'TRUE' : 'FALSE';
+        }
+        if (is_object($v) && method_exists($v, '__toString')) {
+            $s = (string)$v;
+            $safe = str_replace("'", "''", $s);
+            return "'" . $safe . "'";
+        }
+
+        // Fallback: JSON-encode arrays/objects; other scalars stringified
+        // (Should not hit for arrays because conditionBuilder handles them separately)
+        if (is_array($v) || is_object($v)) {
+            $json = json_encode($v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $safe = str_replace("'", "''", (string)$json);
+            return "'" . $safe . "'";
+        }
+
+        // Default stringification
+        $safe = str_replace("'", "''", (string)$v);
+        return "'" . $safe . "'";
+    }
+
     /**
      * Export data to JSON format
      * @param array $data Data array
