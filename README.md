@@ -250,5 +250,9 @@ To get the canonical path, use the `canonicalPath()` method
 PHPDBSecurity::canonicalPath(string $path, ?string $baseDir = null);
 ```
 
+### Lockouts
+To prevent lockouts, use the `isLockedOut()`
+> The class already includes a safeguard for this
+
 
 
