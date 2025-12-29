@@ -9,11 +9,11 @@ use XHiddenProjects\PHPDB\PHPDBException;
 // ------------------------------------------------------------
 // 1) (Optional) lock down the /data folder for .phpdb files
 // ------------------------------------------------------------
-PHPDBSecurity::secureDatabase(__DIR__ . '/data', PHPDBSecurity::EX_LOCK); // creates .htaccess/nginx snippet
+PHPDBSecurity::secureDatabase(__DIR__, PHPDBSecurity::EX_LOCK); // creates .htaccess/nginx snippet
 // Tip: create the folder if it doesn't exist.
-if (!is_dir(__DIR__ . '/data')) {
+if (!is_dir(__DIR__ . '/data'))
     mkdir(__DIR__ . '/data', 0750, true);
-}
+
 
 // ------------------------------------------------------------
 // 2) Bootstrap credentials file (phpdb.json) ONCE
@@ -144,9 +144,7 @@ try {
     }
 
     $ordersToday = $db->fetchAll('orders',
-        "WHERE ordered_at >= '2025-12-01 00:00:00' AND ordered_at < '2025-12-02 00:00:00'",
-        "ordered_at ASC"
-    );
+        "WHERE ordered_at >= '2025-12-01 00:00:00' AND ordered_at < '2025-12-02 00:00:00' ORDER BY ordered_at ASC");
     echo "\n📎 SALES.fetchAll(): orders on 2025-12-01\n";
     print_r($ordersToday);
 
