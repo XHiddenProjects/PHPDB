@@ -113,10 +113,10 @@ $db->close($dbName);
 ```
 
 ## Deleting a database
-To delete the database use `deleteDatabase()` method
+To delete the database use `dropDatabase()` method
 ```php
 # Deleting a database
-$db->deleteDatabase($dbName);
+$db->dropDatabase($dbName);
 ```
 ***
 ## Tables
@@ -142,7 +142,26 @@ if(!$db->tableExists($tbl)){
 ### Deleteing tables
 To delete tables use the `dropTable()` method
 ```php
-
+# Delete the table
+$db->dropTable($tbl);
 ```
 
+### renameTable
+To rename tables use the `renameTable()` method
+```php
+# Rename the table
+$db->renameTable($tbl,'user');
+```
+
+### Listing tables
+To list all the created tables use the `listTables()` method
+```php
+# List all the tables
+foreach($db->listTables as $tables){
+...
+}
+```
+***
+## Data
+The section is about how to modify data inside of [tables](#tables)
 
