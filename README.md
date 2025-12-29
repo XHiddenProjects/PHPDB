@@ -146,7 +146,7 @@ To delete tables use the `dropTable()` method
 $db->dropTable($tbl);
 ```
 
-### renameTable
+### Renaming tables
 To rename tables use the `renameTable()` method
 ```php
 # Rename the table
