@@ -1212,7 +1212,7 @@ private function save(string $name): void{
      * @param string $name Database name or path
      * @return void
      */
-    public function deleteDatabase(string $name): void{$this->ensureCanDelete();
+    public function dropDatabase(string $name): void{$this->ensureCanDelete();
         if (! $this->accountCanAccessDb($this->activeAccount ?? [], $name)) {
             throw new PHPDBException("Account is not allowed to delete/access database '$name'.");
         }
