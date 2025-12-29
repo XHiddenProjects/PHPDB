@@ -58,7 +58,7 @@ This is a requirement before loading in a script
 
 ```php
 # Authorize your account.
-$db->authorize($usernameOrAccountKey, $password);
+$db->Authorize($usernameOrAccountKey, $password);
 ```
 > **Warning:** You may have to reauthorize evertime you close, and reopen the database
 ***
