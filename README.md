@@ -252,7 +252,26 @@ PHPDBSecurity::canonicalPath(string $path, ?string $baseDir = null);
 
 ### Lockouts
 To prevent lockouts, use the `isLockedOut()`
-> The class already includes a safeguard for this
+> The class already includes a safeguard for this. To change the lockout settings, go to the `Authorize()` and at the end of the parameter with the lockout settings
+> ```php
+>$db->Authorize($username,$password,['max_attempts'=>5, 'windows_seconds'=>300, 'lock_seconds'=>900]);
+> ``` 
 
+### Creating an account
+To create an account, use the `createAccount()` method
+```php
+PHPDBSecurity::createAccount(
+key,
+username,
+password,
+?role,
+?databases,
+?can_view,
+?can_write,
+?can_create,
+?can_delete,
+?credPath 
+);
+```
 
-
+## Utilities
