@@ -51,9 +51,10 @@ class PHPDB{
      * Authorize the users account
      * @param string $usernameOrAccountKey Username/Account key
      * @param string $password Password
+     * @param array{max_attempts: int,windows_seconds: int,lock_seconds: int} $lockoutSettings Lockout settings
      * @return PHPDB
      */
-    public function Authorize(string $usernameOrAccountKey, string $password): self{
+    public function Authorize(string $usernameOrAccountKey, string $password, ?array $lockoutSettings=[]): self{
     // Reset any previous authorization state
     $this->authorized = false;
     $this->authUsername = null;
@@ -68,7 +69,7 @@ class PHPDB{
         $this->activeAccountKey = $this->activeAccount['_key'] ?? null;
         // Check lockout (best-effort throttling)
         $u = (string)($this->activeAccount['username'] ?? ($this->activeAccountKey ?? 'unknown'));
-        if (PHPDBSecurity::isLockedOut($u)) {
+        if (PHPDBSecurity::isLockedOut($u, $lockoutSettings['max_attempts']??5, $lockoutSettings['windows_seconds']??300, $lockoutSettings['lock_seconds']??900)) {
             PHPDBSecurity::auditLog("Authorize blocked (locked out): account={$this->activeAccountKey}");
             return $this;
         }
