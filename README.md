@@ -274,4 +274,24 @@ password,
 );
 ```
 
+### Audits
+To audit any issues, use the `auditLog()` method
+> **Audits** are always active through the class, so if any issues occur it will log it into the file, so you can see where it's located; File: `__DIR__.DIRECTORY_SEPARATOR.'phpdb_audit.log'`;
+
 ## Utilities
+This section is using using the utilites, usage
+
+### Find
+Find any results through the dataset, use the `find()` method
+
+```php
+# Find the results base on keysearch. Returns as an array or null if empty
+PHPDBUtils::find(PHPDB $PHPDB, string $tableName, string $columnName, string $searchTerm, ?callable $output=null);
+```
+
+### search
+Searchs if the context exists
+```php
+# Search for a certin context in the table. Returns boolean
+PHPDBUtils::search(PHPDB $PHPDB, string $tableName, string $searchTerm);
+```
