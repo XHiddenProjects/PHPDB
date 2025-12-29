@@ -165,3 +165,23 @@ foreach($db->listTables as $tables){
 ## Data
 The section is about how to modify data inside of [tables](#tables)
 
+### Inserting data
+To insert data, use the `insert()` method
+```php
+# Insert data inside the able
+# Example of the SQL syntax
+# ['id'=>'INT AUTO_INCREMENT UNIQUE','item'=>'VARCHAR(100) NOT NULL'];
+$db->insert($tbl, [
+'column_name'=>'SQL syntax here'
+]);
+```
+
+### Updating data
+To update the data, use the `update()` method
+```php
+$db->update($tbl,[
+  'column_name'=>'colume_value'
+], 'SQL_WHERE_syntax');
+```
+
+### Deleteing data
