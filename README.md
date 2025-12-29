@@ -61,7 +61,7 @@ This is a requirement before loading in a script
 $db->authorize($usernameOrAccountKey, $password);
 ```
 > **Warning:** You may have to reauthorize evertime you close, and reopen the database
-
+***
 ## Databases
 This section is about databases
 
@@ -118,7 +118,7 @@ To delete the database use `deleteDatabase()` method
 # Deleting a database
 $db->deleteDatabase($dbName);
 ```
-
+***
 ## Tables
 This section is about tables and data inside of tables
 
@@ -137,6 +137,12 @@ if(!$db->tableExists($tbl)){
     'created' => 'DATETIME NOT NULL'
   ]);
 }
+```
+
+### Deleteing tables
+To delete tables use the `dropTable()` method
+```php
+
 ```
 
 
