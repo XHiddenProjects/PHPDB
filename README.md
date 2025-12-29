@@ -295,3 +295,37 @@ Searchs if the context exists
 # Search for a certin context in the table. Returns boolean
 PHPDBUtils::search(PHPDB $PHPDB, string $tableName, string $searchTerm);
 ```
+
+### Counting rows
+To return the number of rows that are in the table, use the `countRows()` method
+```php
+# Count the number of rows
+PHPDBUtils::countRows(PHPDB $PHPDB, string $tableName)
+```
+
+### Filter
+Filters the `fetchAll()` results, use the `filter()` method
+```php
+# Filter the results
+PHPDBUtils::filter(PHPDB $PHPDB, string $tableName, callable $callback);
+```
+
+### Indexs
+Create an index using the `createIndex()`, update index using the `updateIndex()`, delete indexes using `dropIndex()`, and list the indexes using `listIndexes()`
+```php
+# Create index
+PHPDBUtils::createIndex(PHPDB $PHPDB, string $tableName, string $columnName);
+# Update
+PHPDBUtils::updateIndex(PHPDB $PHPDB, string $tableName, string $columnName);
+# Delete
+PHPDBUtils::dropIndex(PHPDB $PHPDB, string $tableName, string $columnName)
+# List
+PHPDBUtils::listIndexes(PHPDB $PHPDB, string $tableName)
+```
+
+### Condition builder
+Use this to easily build a SQL WHERE condition string, use the `conditionBuilder()` method
+```php
+# Build a condition
+PHPDBUtils::conditionBuilder(array $conditions);
+```
