@@ -177,11 +177,24 @@ $db->insert($tbl, [
 ```
 
 ### Updating data
-To update the data, use the `update()` method
+To update the data, use the `update()` method.
 ```php
 $db->update($tbl,[
   'column_name'=>'colume_value'
 ], 'SQL_WHERE_syntax');
 ```
+> **Note:** IF the condition is a `string` then it must have the  _"WHERE"_ keyword
 
 ### Deleteing data
+To delete a data from the table, use the `delete()` method
+```php
+$db->delete($tbl,'SQL_WHERE_SYNTAX');
+```
+> **Note:** IF the condition is a `string` then it must have the _"WHERE"_ keyword
+
+### Fetching data
+To fetch a singular data, use the `fetch()` and if you multiple, use `fetchAll()`
+```php
+$db->fetch($tbl, );
+```
+> **Note:** IF the condition is a `string` then it must have the  _"WHERE"_ keyword
