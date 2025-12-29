@@ -329,3 +329,11 @@ Use this to easily build a SQL WHERE condition string, use the `conditionBuilder
 # Build a condition
 PHPDBUtils::conditionBuilder(array $conditions);
 ```
+
+### Joining tables
+You can join 2 tables in a database, using the `join()` method
+```php
+# Joining tables
+# Valid types are 'inner', 'left', 'right', and 'cross'
+PHPDBUtils::join(PHPDB $db, string $table1, string $table2, string $joinType = 'inner', array|string|null $on = null, ?string $order = null);
+```
