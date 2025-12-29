@@ -1534,146 +1534,167 @@ $table['rows'][] = $row;
      * @throws PHPDBException Database or table does not exist.
      * @return void
      */
+    
     public function update(string $tableName, array $data, string|array $conditions): void{
         $this->ensureCanWrite();
-        if($this->openDB === "") 
+        if ($this->openDB === "") {
             throw new PHPDBException("Database '$this->openDB' is not open. Please open the database before updating data.");
+        }
+
         $dbKey = strtolower($this->openDB);
-        if(!isset($this->databases[$dbKey])){
+        if (!isset($this->databases[$dbKey])) {
             throw new PHPDBException("Database '$this->openDB' does not exist.");
         }
-        if(!isset($this->databases[$dbKey]['tables'][strtolower($tableName)])){
+        if (!isset($this->databases[$dbKey]['tables'][strtolower($tableName)])) {
             throw new PHPDBException("Table '$tableName' does not exist in database '$this->openDB'.");
         }
 
         $table = &$this->databases[$dbKey]['tables'][strtolower($tableName)];
 
-        // Normalize conditions to a string
-        if(\is_array($conditions)){
-            // associative array => column => value pairs joined with AND
-            $isAssoc = array_keys($conditions) !== range(0, \count($conditions) - 1);
-            if($isAssoc){
-                $parts = [];
-                foreach($conditions as $k => $v){
-                    if(\is_string($v)){
-                        $safe = str_replace("'", "\\'", $v);
-                        $parts[] = "$k='$safe'";
-                    } elseif($v===null){
-                        $parts[] = "$k IS NULL";
-                    } elseif(\is_bool($v)){
-                        $parts[] = $k . ' ' . ($v ? '= TRUE' : '= FALSE');
-                    } else {
-                        $parts[] = "$k=$v";
-                    }
-                }
-                $condStr = implode(' AND ', $parts);
-            } else {
-                // numeric array of condition strings
-                $condStr = implode(' AND ', $conditions);
-            }
-        } else {
-            $condStr = trim($conditions);
-        }
+        // ✅ STRICT: normalize to a canonical WHERE string (string input MUST start with WHERE)
+        $where = $this->normalizeConditionsToWhereStrict($conditions);
 
-        // closure to evaluate condition against a row
+        // ✅ evaluateCondition expects only the expression, not the WHERE keyword
+        $condStr = ltrim(preg_replace('/^\s*WHERE\s+/i', '', $where));
+
         $matches = fn(array $row, string $cond): bool => $this->evaluateCondition($row, $cond);
 
         $updated = false;
-        
+
         // Snapshot rows BEFORE update that match condition
         $preRows = [];
-        foreach ($table['rows'] as $i => $r0) {
+        foreach ($table['rows'] as $r0) {
             if ($matches($r0, $condStr)) { $preRows[] = $r0; }
         }
 
-        foreach($table['rows'] as $idx => $row){
-            if($matches($row, $condStr)){
-                foreach($data as $col => $val){
+        foreach ($table['rows'] as $idx => $row) {
+            if ($matches($row, $condStr)) {
+                foreach ($data as $col => $val) {
                     $table['rows'][$idx][$col] = $val;
                 }
                 $updated = true;
             }
         }
 
-        
         // Snapshot rows AFTER update that match condition
         $postRows = [];
-        foreach ($table['rows'] as $i => $r1) {
+        foreach ($table['rows'] as $r1) {
             if ($matches($r1, $condStr)) { $postRows[] = $r1; }
         }
+
         // Enforce foreign key constraints for UPDATE
         $this->enforceForeignKeysOnUpdate($dbKey, $tableName, $preRows, $postRows, $data, $condStr);
 
-        if($updated){
+        if ($updated) {
             $this->save($this->openDB);
         }
     }
+
+ 
     /**
-     * Deletes a data from the table
+     * Deletes data from the table
      * @param string $tableName Table name
-     * @param string|array $conditions Conditions for drop (SQL-like string e.g. "id=1 AND username='john'" or an array)
-     * @return void
+     * @param string|array $conditions Conditions for drop (SQL-like string e.g. "WHERE id=1 AND username='john'" or an array)
+     * @return int Number of deleted rows
      */
-    public function delete(string $tableName, string|array $conditions): void{
+    public function delete(string $tableName, string|array $conditions): int {
         $this->ensureCanDelete();
-        if($this->openDB === "") 
-            throw new PHPDBException("Database '$this->openDB' is not open. Please open the database before deleting data.");
-        $dbKey = strtolower($this->openDB);
-        if(!isset($this->databases[$dbKey])){
-            throw new PHPDBException("Database '$this->openDB' does not exist.");
+
+        if ($this->openDB === "") {
+            throw new PHPDBException("Database '{$this->openDB}' is not open. Please open the database before deleting data.");
         }
-        if(!isset($this->databases[$dbKey]['tables'][strtolower($tableName)])){
-            throw new PHPDBException("Table '$tableName' does not exist in database '$this->openDB'.");
+
+        $dbKey = strtolower($this->openDB);
+        if (!isset($this->databases[$dbKey])) {
+            throw new PHPDBException("Database '{$this->openDB}' does not exist.");
+        }
+        if (!isset($this->databases[$dbKey]['tables'][strtolower($tableName)])) {
+            throw new PHPDBException("Table '$tableName' does not exist in database '{$this->openDB}'.");
         }
 
         $table = &$this->databases[$dbKey]['tables'][strtolower($tableName)];
 
-        // Normalize conditions to a string
-        if(\is_array($conditions)){
-            // associative array => column => value pairs joined with AND
-            $isAssoc = array_keys($conditions) !== range(0, \count($conditions) - 1);
-            if($isAssoc){
-                $parts = [];
-                foreach($conditions as $k => $v){
-                    if(\is_string($v)){
-                        $safe = str_replace("'", "\\'", $v);
-                        $parts[] = "$k='$safe'";
-                    } elseif($v===null){
-                        $parts[] = "$k IS NULL";
-                    } elseif(\is_bool($v)){
-                        $parts[] = $k . ' ' . ($v ? '= TRUE' : '= FALSE');
-                    } else {
-                        $parts[] = "$k=$v";
-                    }
-                }
-                $condStr = implode(' AND ', $parts);
-            } else {
-                // numeric array of condition strings
-                $condStr = implode(' AND ', $conditions);
-            }
-        } else {
-            $condStr = trim($conditions);
-        }
+        // Normalize conditions to a canonical WHERE string (strict)
+        $condStr = $this->normalizeConditionsToWhereStrict($conditions);
+
+        // Strip leading WHERE for evaluateCondition
+        $expr = ltrim(preg_replace('/^\s*WHERE\s+/i', '', $condStr));
 
         // closure to evaluate condition against a row
         $matches = fn(array $row, string $cond): bool => $this->evaluateCondition($row, $cond);
 
         $keptRows = [];
-        $deleted = false;
-        foreach($table['rows'] as $row){
-            if($matches($row, $condStr)){
-                $deleted = true;
+        $deletedCount = 0;
+
+        foreach ($table['rows'] as $row) {
+            if ($matches($row, $expr)) {
+                $deletedCount++;
                 // row is dropped
             } else {
                 $keptRows[] = $row;
             }
         }
 
-        if($deleted){
+        if ($deletedCount > 0) {
             $table['rows'] = $keptRows;
             $this->save($this->openDB);
         }
+
+        return $deletedCount;
     }
+
+    /**
+     * Converts string|array conditions into a canonical WHERE string.
+     * Strict mode: string conditions MUST start with "WHERE".
+     */
+    private function normalizeConditionsToWhereStrict(string|array $conditions): string
+    {
+        if (is_array($conditions)) {
+            // associative array => column => value pairs joined with AND
+            $isAssoc = array_keys($conditions) !== range(0, count($conditions) - 1);
+
+            if ($isAssoc) {
+                $parts = [];
+                foreach ($conditions as $k => $v) {
+                    if (is_string($v)) {
+                        // escape single quotes
+                        $safe = str_replace("'", "\\'", $v);
+                        $parts[] = "$k='$safe'";
+                    } elseif ($v === null) {
+                        $parts[] = "$k IS NULL";
+                    } elseif (is_bool($v)) {
+                        $parts[] = $k . ' ' . ($v ? '= TRUE' : '= FALSE');
+                    } else {
+                        // numbers or other scalar
+                        $parts[] = "$k=$v";
+                    }
+                }
+                $cond = implode(' AND ', $parts);
+            } else {
+                // numeric array of condition strings => join with AND
+                $cond = implode(' AND ', $conditions);
+            }
+
+            $cond = trim($cond);
+            if ($cond === '') {
+                // Avoid mass delete by requiring some condition
+                throw new PHPDBException("Empty conditions array provided. Refusing to delete without a WHERE expression.");
+            }
+            return 'WHERE ' . $cond;
+        }
+
+        // string input (strict WHERE required)
+        $cond = trim($conditions);
+        if ($cond === '') {
+            throw new PHPDBException("Empty condition string provided. Refusing to delete without a WHERE clause.");
+        }
+        if (!preg_match('/^\s*WHERE\s+/i', $cond)) {
+            throw new PHPDBException("Condition string must start with 'WHERE'. Provided: '$cond'");
+        }
+
+        return $cond;
+    }
+
 
     /**
      * Fetches all rows from a specified table.
