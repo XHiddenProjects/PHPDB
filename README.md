@@ -194,7 +194,61 @@ $db->delete($tbl,'SQL_WHERE_SYNTAX');
 
 ### Fetching data
 To fetch a singular data, use the `fetch()` and if you multiple, use `fetchAll()`
+**Note:** you can also use the `ORDER BY` to sort your dataset
+
 ```php
-$db->fetch($tbl, );
+# Fetch only a singular result
+$db->fetch($tbl, 'SQL_WHERE_SYNTAX_AND_ORDER_BY_SYNTAX');
+
+# Fetch All the results
+$db->fetchAll($tbl, 'SQL_WHERE_SYNTAX_AND_ORDER_BY_SYNTAX');
 ```
 > **Note:** IF the condition is a `string` then it must have the  _"WHERE"_ keyword
+
+## Security
+This section is about how to use the best security practices of _PHPDB_
+
+### Crash Recovery
+To recover any crashes use the `crashRecovery()` method
+```php
+# Recover any crashes
+$db->crashRecovery($dbName);
+```
+
+### Prevent direct access
+To prevent direct access to the phpdb.php file, use `preventDirectAccess()`
+```php
+# Blocks the phpdb.php file access
+PHPDBSecurity::preventDirectAccess();
+```
+
+### Securing the database
+To secure the database, use the `secureDatabase()` method
+```php
+# Use `EX_UNLOCK` to remove the security
+PHPDBSecurity::secureDatabase(__DIR__,PHPDBSecurity::EX_LOCK);
+```
+
+### Escaping text
+To escape the text before inserting, use the `escape()` method
+```php
+# Escape the string
+PHPDBSecurity::escape('string');
+```
+
+### Sending a secure header
+To secure the header, use the `sendSecureHeaders()` method
+```php
+# Secure the headers
+PHPDBSecurity::sendSecureHeaders();
+```
+
+### canonicalPath
+To get the canonical path, use the `canonicalPath()` method
+```php
+# Get the canoical path
+PHPDBSecurity::canonicalPath(string $path, ?string $baseDir = null);
+```
+
+
+
