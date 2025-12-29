@@ -66,6 +66,12 @@ class PHPDB{
         $this->credConfig = $this->loadCredConfig($this->credPath);
         $this->activeAccount = $this->resolveAccount($this->credConfig, $usernameOrAccountKey);
         $this->activeAccountKey = $this->activeAccount['_key'] ?? null;
+        // Check lockout (best-effort throttling)
+        $u = (string)($this->activeAccount['username'] ?? ($this->activeAccountKey ?? 'unknown'));
+        if (PHPDBSecurity::isLockedOut($u)) {
+            PHPDBSecurity::auditLog("Authorize blocked (locked out): account={$this->activeAccountKey}");
+            return $this;
+        }
         // Allow config to override cipher
         if (isset($this->credConfig['encryption']) && \is_string($this->credConfig['encryption']) && $this->credConfig['encryption'] !== '') {
             $this->encryptionType = $this->credConfig['encryption'];
