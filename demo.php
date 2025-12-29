@@ -95,7 +95,6 @@ try {
     // HR DB
     auth($db);
     $db->createDatabase('hr', $dbRoot);                            // creates hr.phpdb
-    auth($db);
     if (!$db->open('hr')) {
         throw new PHPDBException("Failed to open DB: hr");
     }
