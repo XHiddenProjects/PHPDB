@@ -65,7 +65,7 @@ $db->Authorize($usernameOrAccountKey, $password);
 ## Databases
 This section is about databases
 
-## Creating a database
+### Creating a database
 To create a database use the `createDatabase()`
 ```php
 $dbName = 'myapp';
