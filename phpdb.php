@@ -1696,22 +1696,35 @@ $table['rows'][] = $row;
     }
 
 
+
+    
     /**
      * Fetches all rows from a specified table.
+     *
+     * Usage examples:
+     *  - fetchAll('users')
+     *  - fetchAll('users', "WHERE age >= 18")
+     *  - fetchAll('users', "age >= 18 ORDER BY id DESC")
+     *  - fetchAll('users', "ORDER BY created_at DESC")
+     *
      * @param string $tableName Table name
-     * @param ?string  $order Optional ORDER BY clause (e.g. "column_name ASC" or "column_name DESC")
-     * @throws PHPDBException Database or table does not exist.
-     * @return array An array of rows from the specified table.
+     * @param ?string $condition Condition expression, optionally including:
+     *        - optional leading "WHERE"
+     *        - optional "ORDER BY <column> [ASC|DESC]"
+     * @throws PHPDBException
+     * @return array
      */
-    public function fetchAll(string $tableName, ?string $conditionsOrOrder = null, ?string $order = null): array{
-        $this->ensureCanView();
+    public function fetchAll(string $tableName, ?string $condition = null): array{
+        $this->ensureCanView(); 
         if ($this->openDB === '') {
             throw new PHPDBException("Database '{$this->openDB}' is not open. Please open the database before fetching data.");
         }
+
         $dbKey = strtolower($this->openDB);
         if (!isset($this->databases[$dbKey])) {
             throw new PHPDBException("Database '{$this->openDB}' does not exist.");
         }
+
         $tableKey = strtolower($tableName);
         if (!isset($this->databases[$dbKey]['tables'][$tableKey])) {
             throw new PHPDBException("Table '$tableName' does not exist in database '{$this->openDB}'.");
@@ -1719,37 +1732,32 @@ $table['rows'][] = $row;
 
         $rows = $this->databases[$dbKey]['tables'][$tableKey]['rows'];
 
-        // Backward compatibility:
-        // - Old: fetchAll('users', 'id ASC')
-        // - New: fetchAll('users', "age > 5", 'id ASC')
-        $condStr = '';
-        if ($order === null && $conditionsOrOrder !== null) {
-            $maybe = trim($conditionsOrOrder);
-            if (preg_match('/^\s*[A-Za-z_][A-Za-z0-9_]*\s*(ASC|DESC)?\s*$/i', $maybe) === 1) {
-                $order = $maybe;
-            } else {
-                $condStr = $maybe;
-            }
-        } elseif ($conditionsOrOrder !== null) {
-            $condStr = trim($conditionsOrOrder);
-        }
+        $condStr = trim((string)$condition);
+        $order = null;
 
-        // Allow optional leading WHERE and optional ORDER BY in the condition string
         if ($condStr !== '') {
+            // Allow optional leading WHERE
             $condStr = preg_replace('/^\s*WHERE\s+/i', '', $condStr);
-            if (preg_match('/ORDER\s+BY\s+([A-Za-z_][A-Za-z0-9_]*)\s*(ASC|DESC)?/i', $condStr, $m)) {
+
+            // Extract ORDER BY from the condition string (if present)
+            // Supports: ORDER BY col, ORDER BY col ASC, ORDER BY col DESC
+            if (preg_match('/\bORDER\s+BY\s+([A-Za-z_][A-Za-z0-9_]*)\s*(ASC|DESC)?\b/i', $condStr, $m)) {
                 $orderCol = $m[1];
                 $orderDir = (isset($m[2]) && strtoupper($m[2]) === 'DESC') ? 'DESC' : 'ASC';
-                $order = $orderCol . ' ' . $orderDir;
-                $condStr = preg_replace('/ORDER\s+BY\s+[A-Za-z_][A-Za-z0-9_]*\s*(ASC|DESC)?/i', '', $condStr);
+                $order = "$orderCol $orderDir";
+
+                // Remove the ORDER BY clause from the condition expression before evaluating it
+                $condStr = preg_replace('/\bORDER\s+BY\s+[A-Za-z_][A-Za-z0-9_]*\s*(ASC|DESC)?\b/i', '', $condStr);
                 $condStr = trim($condStr);
             }
         }
 
+        // Filter rows if condition expression exists
         if ($condStr !== '') {
             $rows = array_values(array_filter($rows, fn($r) => $this->evaluateCondition((array)$r, $condStr)));
         }
 
+        // Apply ordering if requested via ORDER BY inside condition
         if ($order !== null && trim($order) !== '') {
             if (preg_match('/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(ASC|DESC)?\s*$/i', $order, $m)) {
                 $orderColumn = $m[1];
@@ -1758,20 +1766,26 @@ $table['rows'][] = $row;
                 usort($rows, function($a, $b) use ($orderColumn, $orderDir) {
                     $va = $a[$orderColumn] ?? null;
                     $vb = $b[$orderColumn] ?? null;
+
                     if ($va === $vb) return 0;
                     if ($va === null) return ($orderDir === 'ASC') ? -1 : 1;
                     if ($vb === null) return ($orderDir === 'ASC') ? 1 : -1;
 
+                    // Date/time compare if both look like datetimes
                     $tsa = $this->toTimestampIfDateTime($va);
                     $tsb = $this->toTimestampIfDateTime($vb);
                     if ($tsa !== null && $tsb !== null) {
                         $cmp = $tsa <=> $tsb;
                         return ($orderDir === 'ASC') ? $cmp : -$cmp;
                     }
+
+                    // Numeric compare
                     if (is_numeric($va) && is_numeric($vb)) {
                         $cmp = ((float)$va) <=> ((float)$vb);
                         return ($orderDir === 'ASC') ? $cmp : -$cmp;
                     }
+
+                    // String compare fallback
                     $cmp = strcmp((string)$va, (string)$vb);
                     return ($orderDir === 'ASC') ? $cmp : -$cmp;
                 });
@@ -1780,6 +1794,7 @@ $table['rows'][] = $row;
 
         return $rows;
     }
+
     /**
      * Fetches a single row from a specified table based on conditions.
      * Supports optional ORDER BY <column> [ASC|DESC] in the conditions (similar to MySQL).
@@ -1807,11 +1822,8 @@ $table['rows'][] = $row;
                 $condStr = trim($condStr);
             }
         }
-
-        $rows = $this->fetchAll($table, $condStr !== '' ? $condStr : null, $order);
+        $rows = $this->fetchAll($table, $condStr !== '' ? $condStr : null);
         if ($rows === []) return null;
-
-        // Return a single row wrapped (backward compatible with existing behavior)
         return [$rows[0]];
     }
 
