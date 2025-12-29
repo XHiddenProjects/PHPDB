@@ -103,7 +103,7 @@ To restore the database use the `restoreDatabase()`
 $db->restoreDatabase($dbName,  __DIR__.DIRECTORY_SEPARATOR.'backups');
 ```
 
-## Opening/Closing databases
+### Opening/Closing databases
 To open the database use the `open()` and to close use the `close()`
 ```php
 # Open
@@ -112,7 +112,7 @@ $db->open($dbName);
 $db->close($dbName);
 ```
 
-## Deleting a database
+### Deleting a database
 To delete the database use `dropDatabase()` method
 ```php
 # Deleting a database
