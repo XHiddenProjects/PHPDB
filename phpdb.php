@@ -1140,7 +1140,14 @@ private function save(string $name): void{
         
         $decrypted = openssl_decrypt($cipherRaw, $this->encryptionType, $encKey, OPENSSL_RAW_DATA, $iv);
         if ($decrypted === false || $decrypted === '') { PHPDBSecurity::recordFailedLogin($this->authUsername); return false; }
-        $results = @unserialize($decrypted, ['allowed_classes' => false]);
+        if (!$this->isSerialized($decrypted)) {
+                PHPDBSecurity::recordFailedLogin($this->authUsername ?? '');
+                return false;
+            }
+            if (!$this->isSerialized($decrypted)) {
+                return false;
+            }
+            $results = @unserialize($decrypted, ['allowed_classes' => false]);
         if (!\is_array($results) || !isset($results['username'], $results['password'], $results['name'])) { PHPDBSecurity::recordFailedLogin($this->authUsername); return false; }
 
         // Authenticate (constant-time username check, uniform failure path)
@@ -1176,7 +1183,14 @@ private function save(string $name): void{
         $iv    = hex2bin($ivHex);
         $decryptedData = openssl_decrypt($parts[1], $this->encryptionType, $key, 0, $iv);
         if ($decryptedData === false || $decryptedData === '') { PHPDBSecurity::recordFailedLogin($this->authUsername); return false; }
-        $results = @unserialize($decryptedData, ['allowed_classes' => false]);
+        if (!$this->isSerialized($decryptedData)) {
+                PHPDBSecurity::recordFailedLogin($this->authUsername ?? '');
+                return false;
+            }
+            if (!$this->isSerialized($decryptedData)) {
+                return false;
+            }
+            $results = @unserialize($decryptedData, ['allowed_classes' => false]);
         if (!is_array($results) || !isset($results['username'], $results['password'], $results['name'])) { PHPDBSecurity::recordFailedLogin($this->authUsername); return false; }
         $dummyHash  = '$2y$12$C6UzMDM.H6dfI/f/IKcEeO9y3lGkz6tN8vD7ZrJmM5YpXz.3n/7QW';
         $storedUser = (string)$results['username'];
@@ -1444,7 +1458,7 @@ private function save(string $name): void{
                         } elseif($isDateTime || $isDate || $isTime || $isYear){
                             try {
                                 $dt = $val instanceof \DateTime ? $val : new \DateTime((string)$val);
-                            } catch (PHPDBException $e) {
+                            } catch (\Throwable $e) {
                                 // try with strtotime fallback
                                 $ts = \strtotime((string)$val);
                                 if($ts === false) {
@@ -1631,11 +1645,13 @@ $table['rows'][] = $row;
         $matches = fn(array $row, string $cond): bool => $this->evaluateCondition($row, $cond);
 
         $keptRows = [];
+        $toDeleteRows = [];
         $deletedCount = 0;
 
         foreach ($table['rows'] as $row) {
             if ($matches($row, $expr)) {
                 $deletedCount++;
+                $toDeleteRows[] = $row;
                 // row is dropped
             } else {
                 $keptRows[] = $row;
@@ -1643,6 +1659,9 @@ $table['rows'][] = $row;
         }
 
         if ($deletedCount > 0) {
+            // Apply ON DELETE actions on child tables (CASCADE / SET NULL / RESTRICT)
+            $this->applyParentOnDeleteActions($dbKey, $tableName, $toDeleteRows);
+
             $table['rows'] = $keptRows;
             $this->save($this->openDB);
         }
@@ -1831,7 +1850,7 @@ $table['rows'][] = $row;
         }
         $rows = $this->fetchAll($table, $condStr !== '' ? $condStr : null);
         if ($rows === []) return null;
-        return [$rows[0]];
+        return $rows[0];
     }
 
     /**
@@ -3251,8 +3270,7 @@ class PHPDBUtils{
      * Result rows use namespaced keys to avoid collisions: 'table1.column' and 'table2.column'.
      * Optionally you can provide $order like 'table1.column ASC' or 'table2.column DESC'.
      */
-    public static function join(PHPDB $db, string $table1, string $table2, string $joinType = 'inner', array|string|null $on = null, ?string $order = null): array
-    {
+    public static function join(PHPDB $db, string $table1, string $table2, string $joinType = 'inner', array|string|null $on = null, ?string $order = null): array{
         // Fetch rows (fetchAll ensures can_view and requires the DB to be open)
         $rows1 = $db->fetchAll($table1);
         $rows2 = $db->fetchAll($table2);
