@@ -5,8 +5,14 @@ class PHPDB{
     protected string $passwordPlain = '';
     protected string $openDB = '';
     protected string $encryptionType = 'AES-256-CBC';
+
+    /** Allowed OpenSSL ciphers for PHPDB encrypted files. */
+    private const ALLOWED_CIPHERS = ['AES-256-CBC'];
     protected ?string $credPath = null;
     protected array $credConfig = [];
+ protected ?string $baseDir = null;
+ protected bool $allowLegacyV1 = false;
+ protected bool $allowPathOpen = false;
     protected ?array $activeAccount = null;
     protected ?string $activeAccountKey = null;
     protected bool $authorized = false;
@@ -29,17 +35,22 @@ class PHPDB{
      * @param ?string $credPath Path to phpdb.json (JSON)
      */
     public function __construct(?string $credPath = null) {
-        if(file_exists(__DIR__.DIRECTORY_SEPARATOR.'phpdb_pepper.secret'))
-            putenv("PHPDB_PEPPER=".file_get_contents(__DIR__.DIRECTORY_SEPARATOR."phpdb_pepper.secret"));
-        else{
-            if (!getenv('PHPDB_PEPPER')){
-                $secret = bin2hex(random_bytes(64));
-                putenv("PHPDB_PEPPER=$secret");
-                @file_put_contents('phpdb_pepper.secret', $secret);
-            }
-        }
-
         
+$pepperFile = __DIR__ . DIRECTORY_SEPARATOR . 'phpdb_pepper.secret';
+if (is_file($pepperFile)) {
+    $pep = @file_get_contents($pepperFile);
+    if (is_string($pep) && trim($pep) !== '') {
+        putenv('PHPDB_PEPPER=' . trim($pep));
+    }
+} else {
+    if (!getenv('PHPDB_PEPPER')) {
+        $secret = bin2hex(random_bytes(64));
+        putenv("PHPDB_PEPPER=$secret");
+        @file_put_contents($pepperFile, $secret, LOCK_EX);
+        @chmod($pepperFile, 0600);
+    }
+}
+
         $this->databases = [];
         $this->openDB = '';
         $this->credPath = $credPath ?? (__DIR__ . DIRECTORY_SEPARATOR . 'phpdb.json');
@@ -73,12 +84,26 @@ class PHPDB{
             PHPDBSecurity::auditLog("Authorize blocked (locked out): account={$this->activeAccountKey}");
             return $this;
         }
-        // Allow config to override cipher
-        if (isset($this->credConfig['encryption']) && \is_string($this->credConfig['encryption']) && $this->credConfig['encryption'] !== '') {
-            $this->encryptionType = $this->credConfig['encryption'];
+        // Allow config to override cipher (restricted to an allow-list)
+        if (isset($this->credConfig['encryption']) && is_string($this->credConfig['encryption']) && $this->credConfig['encryption'] !== '') {
+            $this->encryptionType = $this->sanitizeCipher($this->credConfig['encryption']);
+        } else {
+            $this->encryptionType = $this->sanitizeCipher($this->encryptionType);
         }
 
-        // Verify password against phpdb.json (supports optional env+pepper)
+        
+
+// Optional security policy from config
+if (isset($this->credConfig['allow_legacy_v1'])) {
+    $this->allowLegacyV1 = (bool)$this->credConfig['allow_legacy_v1'];
+}
+if (isset($this->credConfig['allow_path_open'])) {
+    $this->allowPathOpen = (bool)$this->credConfig['allow_path_open'];
+}
+// Resolve base directory for DB files
+$this->baseDir = $this->resolveBaseDir();
+
+// Verify password against phpdb.json (supports optional env+pepper)
         if (!$this->verifyAccountPassword($this->activeAccount, $password)) {
             $u = (string)($this->activeAccount['username'] ?? ($this->activeAccountKey ?? 'unknown'));
             PHPDBSecurity::recordFailedLogin($u);
@@ -187,7 +212,147 @@ class PHPDB{
     }
 
     /** Verify a user password against an account's password/password_env in phpdb.json. */
-    private function verifyAccountPassword(array $account, ?string $password): bool {
+    
+
+/**
+ * Resolve and ensure a base directory for all DB files (recommended: outside web root).
+ * Can be configured via phpdb.json: { "base_dir": "/absolute/path" }
+ */
+
+    /**
+     * Enforce an allow-list for OpenSSL cipher selection.
+     * Prevents configuration from downgrading to weak/unsupported ciphers.
+     */
+    private function sanitizeCipher(?string $cipher): string
+    {
+        $c = is_string($cipher) ? trim($cipher) : '';
+        if ($c === '') return 'AES-256-CBC';
+        foreach (self::ALLOWED_CIPHERS as $allowed) {
+            if (strcasecmp($allowed, $c) === 0) return $allowed;
+        }
+        PHPDBSecurity::auditLog("Invalid/unsupported cipher requested in config: '{$c}'. Falling back to AES-256-CBC.");
+        return 'AES-256-CBC';
+    }
+
+private function resolveBaseDir(): string {
+    // Prefer config base_dir, else default to __DIR__/phpdb_data
+    $cfgBase = $this->credConfig['base_dir'] ?? null;
+    $base = (is_string($cfgBase) && trim($cfgBase) !== '') ? trim($cfgBase) : (__DIR__ . DIRECTORY_SEPARATOR . 'databases');
+
+    // If relative, anchor to __DIR__
+    if (!str_starts_with($base, DIRECTORY_SEPARATOR) && !preg_match('/^[A-Za-z]:\\\\/', $base)) {
+        $base = __DIR__ . DIRECTORY_SEPARATOR . $base;
+    }
+
+    if (!is_dir($base)) {
+        @mkdir($base, 0750, true);
+    }
+
+    $realBase = realpath($base);
+    if ($realBase === false) {
+        throw new PHPDBException("Base directory is not accessible: $base");
+    }
+    PHPDBSecurity::secureDatabase($realBase, PHPDBSecurity::EX_LOCK);
+        return rtrim($realBase, DIRECTORY_SEPARATOR);
+}
+
+/**
+ * Strict DB name validation to prevent path traversal and unexpected filesystem access.
+ */
+private function normalizeDbName(string $name): string {
+    $n = strtolower(trim($name));
+    if ($n === '') {
+        throw new PHPDBException('Database name must not be empty.');
+    }
+    // allow letters, digits, underscore, dash; start with letter/digit; 1..64 chars
+    if (!preg_match('/^[a-z0-9][a-z0-9_\-]{0,63}$/', $n)) {
+        throw new PHPDBException('Invalid database name. Allowed: a-z, 0-9, underscore, dash; max 64 chars.');
+    }
+    return $n;
+}
+
+/**
+ * Determine whether the input looks like a filesystem path.
+ */
+private function looksLikePath(string $input): bool {
+    $input = trim($input);
+    if ($input === '') return false;
+    if (str_contains($input, DIRECTORY_SEPARATOR) || str_contains($input, '/') || str_contains($input, '\\')) return true;
+    $ext = strtolower((string)pathinfo($input, PATHINFO_EXTENSION));
+    return $ext === 'phpdb';
+}
+
+/**
+ * Resolve a directory path within the base directory.
+ * If $create is true, the directory is created when missing.
+ */
+private function resolveDirWithinBase(string $dir, bool $create = false): string {
+    if ($this->baseDir === null) {
+        $this->baseDir = $this->resolveBaseDir();
+    }
+    $base = $this->baseDir;
+    $candidate = trim($dir);
+    if ($candidate === '') {
+        $candidate = $base;
+    }
+    // If relative, anchor to base
+    if (!str_starts_with($candidate, DIRECTORY_SEPARATOR) && !preg_match('/^[A-Za-z]:\\\\/', $candidate)) {
+        $candidate = $base . DIRECTORY_SEPARATOR . $candidate;
+    }
+    if ($create && !is_dir($candidate)) {
+        @mkdir($candidate, 0750, true);
+    }
+    $real = realpath($candidate);
+    if ($real === false) {
+        throw new PHPDBException("Invalid directory path: $candidate");
+    }
+    $real = rtrim($real, DIRECTORY_SEPARATOR);
+    if (!str_starts_with($real, $base . DIRECTORY_SEPARATOR) && $real !== $base) {
+        throw new PHPDBException('Path escapes base directory policy.');
+    }
+    return $real;
+}
+
+/**
+ * Resolve a .phpdb file path within the base directory.
+ */
+private function resolvePhpdbFileWithinBase(string $filePath): string {
+    if ($this->baseDir === null) {
+        $this->baseDir = $this->resolveBaseDir();
+    }
+    $base = $this->baseDir;
+    $p = trim($filePath);
+    if ($p === '') throw new PHPDBException('File path must not be empty.');
+    // If relative, anchor to base
+    if (!str_starts_with($p, DIRECTORY_SEPARATOR) && !preg_match('/^[A-Za-z]:\\\\/', $p)) {
+        $p = $base . DIRECTORY_SEPARATOR . $p;
+    }
+    $ext = strtolower((string)pathinfo($p, PATHINFO_EXTENSION));
+    if ($ext !== 'phpdb') {
+        throw new PHPDBException('Only .phpdb files are allowed.');
+    }
+    $real = realpath($p);
+    if ($real === false) {
+        throw new PHPDBException("Database file not found: $p");
+    }
+    $real = (string)$real;
+    if (!str_starts_with($real, $base . DIRECTORY_SEPARATOR)) {
+        throw new PHPDBException('File path escapes base directory policy.');
+    }
+    return $real;
+}
+
+/**
+ * Build the canonical file path for a DB name (within baseDir).
+ */
+private function dbFilePath(string $dbName): string {
+    if ($this->baseDir === null) {
+        $this->baseDir = $this->resolveBaseDir();
+    }
+    $n = $this->normalizeDbName($dbName);
+    return $this->baseDir . DIRECTORY_SEPARATOR . $n . '.phpdb';
+}
+private function verifyAccountPassword(array $account, ?string $password): bool {
         $cfgHash = $account['password'] ?? null;
         $cfgEnv  = $account['password_env'] ?? null;
 
@@ -245,11 +410,14 @@ $this->authPassword = (string)$this->passwordPlain;
 
 
         $name = strtolower(trim($name));
+        // Resolve and restrict DB directory to baseDir
+        $targetDir = $this->resolveDirWithinBase($path !== '' ? $path : ($this->baseDir ?? ''), true);
+        $path = $targetDir;
         if(!isset($this->databases[$name])){
             $this->databases[strtolower($name)] = [
                 'name'=>$name,
                 'extension'=>strtoupper('phpdb'),
-                'path'=>parse_url($path, PHP_URL_PATH),
+                'path'=>$path,
                 'charset'=>$charset,
                 'collation'=>$collation,
                 'tables'=>[],
@@ -257,12 +425,8 @@ $this->authPassword = (string)$this->passwordPlain;
                 'password'=>$hashedPassword,
                 'encryption_version'=>2
             ];
-            if ($path !== '') {
-            if (!is_dir($path) && !@mkdir($path, 0750, true)) {
-                throw new PHPDBException('Failed to create database directory: ' . $path);
-            }
-        }
-            # Encrypt and save the database file
+            // Directory already validated/created via resolveDirWithinBase().
+# Encrypt and save the database file
             $this->save($name);
         }
     }
@@ -279,7 +443,8 @@ $this->authPassword = (string)$this->passwordPlain;
         if(isset($this->databases[$name])){
             $db = $this->databases[$name];
             $filePath = rtrim($db['path'], DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $name . ".phpdb";
-            $backupPath = rtrim($path, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $name . "_backup_" . date('Ymd_His') . ".phpdb";
+            $backupDir = $this->resolveDirWithinBase($path !== '' ? $path : 'backups', true);
+        $backupPath = rtrim($backupDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $name . "_backup_" . date('Ymd_His') . ".phpdb";
             if(file_exists($filePath)){
                 copy($filePath, $backupPath);
             }
@@ -330,7 +495,8 @@ $this->authPassword = (string)$this->passwordPlain;
 
         // Normalize extension for sqlite -> sql
         $targetFormat = ($format === 'sql' || $format === 'sqlite') ? 'sql' : $format;
-        $targetPath   = __DIR__ . DIRECTORY_SEPARATOR . "$name.$targetFormat";
+        $targetPath   = $exportDir = $this->resolveDirWithinBase('exports', true);
+        $targetPath = $exportDir . DIRECTORY_SEPARATOR . "$name.$targetFormat";
 
         // Audit: start
         if (class_exists(__NAMESPACE__ . '\\PHPDBSecurity')) {
@@ -338,7 +504,7 @@ $this->authPassword = (string)$this->passwordPlain;
         }
 
         // Write file
-        $bytes = @file_put_contents($targetPath, $exportContent);
+        $bytes = @file_put_contents($targetPath, $exportContent, LOCK_EX);
 
         // Audit: success/failure
         if (class_exists(__NAMESPACE__ . '\\PHPDBSecurity')) {
@@ -369,6 +535,16 @@ $this->authPassword = (string)$this->passwordPlain;
 
         $path   = trim($path);
         $format = strtolower(trim($format));
+
+        // Import policy: by default, only allow imports from a dedicated folder under baseDir.
+        // Configure in phpdb.json: {
+        //   "import_dir": "imports",
+        //   "allow_import_outside_base": false
+        // }
+        $allowImportOutsideBase = (bool)($this->credConfig['allow_import_outside_base'] ?? false);
+        $importDir = (string)($this->credConfig['import_dir'] ?? 'imports');
+        $allowedImportDir = $this->resolveDirWithinBase($importDir, true);
+
         if ($path === '') {
             throw new PHPDBException("Import path must not be empty.");
         }
@@ -408,8 +584,8 @@ $this->authPassword = (string)$this->passwordPlain;
         } else {
             // Not a file: treat $path as either a stem path (folder + filename without extension),
             // or a folder path (require stem via basename).
-            $candidateDir = is_dir($path) ? rtrim($path, DIRECTORY_SEPARATOR) : dirname($path);
-            $candidateDir = $candidateDir === '' ? '.' : $candidateDir;
+            $candidateDir = $baseDir;
+            $candidateDir = $candidateDir === '' ? $allowedImportDir : $candidateDir;
 
             // Determine stem
             $stem = is_dir($path)
@@ -460,6 +636,23 @@ $this->authPassword = (string)$this->passwordPlain;
             $canonDir  = PHPDBSecurity::canonicalPath($baseDir);
             if ($canonDir !== null) $baseDir = $canonDir;
         }
+
+        
+
+        // Enforce import path policy: restrict imports to the allowed import directory
+        // unless explicitly enabled via allow_import_outside_base.
+        $realInput = realpath($inputPath);
+        if ($realInput === false) {
+            throw new PHPDBException("Invalid import path.");
+        }
+        if (!$allowImportOutsideBase) {
+            $allowed = rtrim($allowedImportDir, DIRECTORY_SEPARATOR);
+            $realNorm = rtrim($realInput, DIRECTORY_SEPARATOR);
+            if ($realNorm !== $allowed && !str_starts_with($realNorm, $allowed . DIRECTORY_SEPARATOR)) {
+                throw new PHPDBException("Import denied by policy: source must be inside '{$allowedImportDir}'.");
+            }
+        }
+        $inputPath = $realInput;
 
         // Read source
         $raw = file_get_contents($inputPath);
@@ -528,7 +721,8 @@ $this->authPassword = (string)$this->passwordPlain;
         if(isset($this->databases[$name])){
             $db = $this->databases[$name];
             $filePath = rtrim($db['path'], DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $name . ".phpdb";
-            if(file_exists($backupFilePath)){
+            try { $backupFilePath = $this->resolvePhpdbFileWithinBase($backupFilePath); } catch (\Throwable $e) { throw new PHPDBException('Invalid backup file path.'); }
+        if (file_exists($backupFilePath)){
                 copy($backupFilePath, $filePath);
             }
         }
@@ -953,7 +1147,8 @@ private function b64urlDecode(string $str): string {
         if($padding > 0){
             $base64 .= str_repeat('=', 4 - $padding);
         }
-        return base64_decode($base64);
+        $out = base64_decode($base64, true);
+        return $out === false ? '' : $out;
     }
 
     /**
@@ -1004,6 +1199,7 @@ private function save(string $name): void{
     }
 
     $dbKey = strtolower($name);
+        try { $dbKey = $this->normalizeDbName($dbKey); } catch (\Throwable $e) { /* keep legacy behavior */ }
     $db = $this->databases[$dbKey];
 
     $filePath = isset($this->databases[$dbKey])
@@ -1099,15 +1295,38 @@ private function save(string $name): void{
         return false;
     }
 
-    // Determine file path. Accept a full file path, or a known DB name.
-    $nameKey = strtolower($name);
-    is_file($name) && strtolower((string)pathinfo($name, PATHINFO_EXTENSION)) === 'phpdb'
-        ? $filePath = $name
-        : $filePath = isset($this->databases[$nameKey])
-            ? (rtrim($this->databases[$nameKey]['path'], DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $name . '.phpdb')
-            : "$name.phpdb";
-
-    if (!file_exists($filePath)) {
+    
+// Determine file path.
+// Security hardening: by default we only allow logical DB names. Optional path-open can be enabled via phpdb.json (allow_path_open=true),
+// but paths are still restricted to baseDir.
+$dbKey = '';
+if ($this->looksLikePath($name)) {
+    if (!$this->allowPathOpen) {
+        PHPDBSecurity::auditLog("Open denied: path-based open is disabled by policy.");
+        return false;
+    }
+    try {
+        $filePath = $this->resolvePhpdbFileWithinBase($name);
+    } catch (\Throwable $e) {
+        PHPDBSecurity::auditLog("Open failed: invalid path: " . $e->getMessage());
+        return false;
+    }
+    $dbKey = strtolower((string)pathinfo($filePath, PATHINFO_FILENAME));
+} else {
+    try {
+        $dbKey = $this->normalizeDbName($name);
+    } catch (\Throwable $e) {
+        PHPDBSecurity::auditLog("Open denied: invalid db name.");
+        return false;
+    }
+    $filePath = $this->dbFilePath($dbKey);
+}
+// Enforce DB-level access policy using the normalized dbKey
+if (!$this->accountCanAccessDb($this->activeAccount, $dbKey)) {
+    PHPDBSecurity::auditLog("Open denied: account={$this->activeAccountKey} db={$dbKey} (not allowed)");
+    return false;
+}
+if (!file_exists($filePath)) {
         // DB doesn't exist yet -> caller can createDatabase() separately (subject to can_create)
         PHPDBSecurity::auditLog("Open failed: database file not found: $filePath");
         return false;
@@ -1175,6 +1394,12 @@ private function save(string $name): void{
     }
     // ---- v1 legacy file format ----
     else {
+            if (!$this->allowLegacyV1) {
+                PHPDBSecurity::auditLog('Open blocked: legacy v1 format disabled.');
+                PHPDBSecurity::recordFailedLogin($this->authUsername ?? '');
+                return false;
+            }
+
         $parts = explode('/', $raw, 2);
         if (count($parts) !== 2) { PHPDBSecurity::recordFailedLogin($this->authUsername); return false; }
         $key = $this->getSanitizedBase64($parts[0]);
@@ -1238,7 +1463,8 @@ private function save(string $name): void{
             throw new PHPDBException("Account is not allowed to delete/access database '$name'.");
         }
 
-            $filePath = isset($this->databases[strtolower($name)]) ? (rtrim($this->databases[strtolower($name)]['path'], DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $name . '.phpdb'):"$name.phpdb";
+            try { $dbKey = $this->normalizeDbName($name); } catch (\Throwable $e) { $dbKey = strtolower($name); }
+        $filePath = $this->dbFilePath($dbKey);
             if(file_exists($filePath)){
                 unlink($filePath);
                 unset($this->databases[strtolower($name)]);
@@ -1893,20 +2119,23 @@ $table['rows'][] = $row;
         if ($input === '') return false;
 
         // If user provided a full path or a filename with .phpdb extension treat it as a path.
-        $looksLikePath = is_file($input) || str_contains($input, DIRECTORY_SEPARATOR) || strtolower((string)pathinfo($input, PATHINFO_EXTENSION)) === 'phpdb';
+        $looksLikePath = $this->looksLikePath($input);
 
         if ($looksLikePath) {
+            if (!$this->allowPathOpen) {
+                PHPDBSecurity::auditLog("CrashRecovery denied: path-based open is disabled by policy");
+                return false;
+            }
+
             // Ensure .phpdb extension if missing
-            $filePathCandidate = strtolower((string)pathinfo($input, PATHINFO_EXTENSION)) === 'phpdb' ? $input : rtrim($input, DIRECTORY_SEPARATOR) . '.phpdb';
-
-            // Preserve directory case but normalize the filename to lowercase
-            $dir = dirname($filePathCandidate);
-            $base = pathinfo($filePathCandidate, PATHINFO_FILENAME);
-            $fileName = strtolower($base) . '.phpdb';
-            $filePath = ($dir === '.' || $dir === '') ? $fileName : rtrim($dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $fileName;
-
-            // database key is the lowercased filename without extension
-            $dbKey = strtolower($base);
+            
+try {
+    $filePath = $this->resolvePhpdbFileWithinBase($input);
+} catch (\Throwable $e) {
+    PHPDBSecurity::auditLog('CrashRecovery: invalid path: ' . $e->getMessage());
+    return false;
+}
+$dbKey = strtolower((string)pathinfo($filePath, PATHINFO_FILENAME));
         } else {
             // Treat as a DB name (case-insensitive names are stored lowercased)
             $dbKey = strtolower($input);
@@ -2028,6 +2257,7 @@ $table['rows'][] = $row;
             return $userOk && $passOk;
         }
 
+        if (!$this->allowLegacyV1) return false;
         // v1 legacy format
         $parts = explode('/', $raw, 2);
         if (\count($parts) != 2) return false;
@@ -3429,6 +3659,10 @@ class PHPDBSecurity {
      * @return void
      */
     public static function secureDatabase(string $dbPath, string $mode = self::EX_LOCK): void{
+        // If locking, ensure the directory exists first (realpath() requires it).
+        if ($mode === self::EX_LOCK && !is_dir($dbPath)) {
+            @mkdir($dbPath, 0750, true);
+        }
         // Restrict to a canonical directory path
         $canon = self::canonicalPath($dbPath);
         if ($canon === null) return;
@@ -3589,15 +3823,17 @@ class PHPDBSecurity {
         // Normalize slashes and resolve symlinks/.. elements
         $real = realpath($path);
         if ($real === false) return null;
-
         if ($baseDir !== null) {
             $base = realpath($baseDir);
             if ($base === false) return null;
-            // Ensure $real is inside $base
-            if (strpos($real, $base) !== 0) return null;
+            $base = rtrim($base, DIRECTORY_SEPARATOR);
+            $realNorm = rtrim($real, DIRECTORY_SEPARATOR);
+            // Ensure $real is inside $base (boundary-safe prefix check)
+            if ($realNorm !== $base && !str_starts_with($realNorm, $base . DIRECTORY_SEPARATOR)) return null;
         }
         return $real;
     }
+
     
     /**
      * Timing-safe string comparison
@@ -3683,6 +3919,7 @@ private static function authClientId(string $username): string {
 
             // Best-effort write-back
             @file_put_contents($file, json_encode($state, JSON_PRETTY_PRINT), LOCK_EX);
+        @chmod($file, 0640);
             return true;
         }
 
@@ -3692,6 +3929,7 @@ private static function authClientId(string $username): string {
 
         // Best-effort write-back (non-fatal)
         @file_put_contents($file, json_encode($state, JSON_PRETTY_PRINT), LOCK_EX);
+        @chmod($file, 0640);
 
         return false;
     }
@@ -3724,6 +3962,7 @@ private static function authClientId(string $username): string {
 
         $state[$id] = $entry;
         @file_put_contents($file, json_encode($state, JSON_PRETTY_PRINT), LOCK_EX);
+        @chmod($file, 0640);
     }
 
     /**
@@ -3739,15 +3978,20 @@ private static function authClientId(string $username): string {
         if (isset($state[$id])) {
             unset($state[$id]);
             @file_put_contents($file, json_encode($state, JSON_PRETTY_PRINT), LOCK_EX);
+        @chmod($file, 0640);
         }
     }
     public static function auditLog(string $message, ?string $logFile = null): void {
+        // Prevent log injection (strip newlines)
+        $message = str_replace(["\r", "\n"], ' ', $message);
+
             if ($logFile === null) {
                 $logFile = __DIR__ . DIRECTORY_SEPARATOR . 'phpdb_audit.log';
             }
             $timestamp = date('Y-m-d H:i:s');
             $entry = "[$timestamp] $message\n";
             file_put_contents($logFile, $entry, FILE_APPEND | LOCK_EX);
+        @chmod($logFile, 0640);
     }
     /**
      * Creates an account to the credentials file
@@ -3766,7 +4010,7 @@ private static function authClientId(string $username): string {
         $path = $credPath ?? (__DIR__ . DIRECTORY_SEPARATOR . 'phpdb.json');
         $dir = dirname($path);
         if (!is_dir($dir)) {
-            @mkdir($dir, 0777, true);
+            @mkdir($dir, 0750, true);
         }
 
         // Load existing config or initialize a minimal one
@@ -3806,11 +4050,12 @@ private static function authClientId(string $username): string {
             'can_view'      => (bool)$can_view,
             'can_delete'      => (bool)$can_delete,
         ];
-
+        $cfg['base_dir'] = dirname(__DIR__).DIRECTORY_SEPARATOR.'databases';
         $json = json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if ($json === false) return false;
 
         $written = @file_put_contents($path, $json, LOCK_EX);
+        @chmod($path, 0640);
         return $written !== false;
     }
 
